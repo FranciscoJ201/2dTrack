@@ -1,4 +1,5 @@
 import json
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, Slider, TextBox
@@ -36,7 +37,7 @@ REF_FOOT_IDX = 15
 # =========================================================================
 
 class PoseViewer2D:
-    def __init__(self, json_path, fps=15):
+    def __init__(self, json_path, fps=15, video_name=""):
         # --- Data Loading ---
         self.frames_map, self.x_lim, self.y_lim = self.load_pose_data(json_path)
         self.sorted_frames = sorted(self.frames_map.keys())
@@ -53,14 +54,16 @@ class PoseViewer2D:
         self.custom_line_points = (0, 15)
         self.sf_vertical = 1.0
         self.ref_height_inches = 70.0
-        self.target_person_id = 0 
+        self.target_person_id = 0
+        self.fighter_name = ""
+        self.video_name = video_name    # used to name the output directory
 
         # --- Figure Setup ---
         self.fig, self.ax = plt.subplots(figsize=(11, 7))
-        plt.subplots_adjust(bottom=0.30)
+        plt.subplots_adjust(bottom=0.35)   # extra room for the new row
         
         self.ax.set_xlim(0, self.x_lim)
-        self.ax.set_ylim(self.y_lim, 0) # Origin at top-left for pixels
+        self.ax.set_ylim(self.y_lim, 0)
         self.ax.set_aspect('equal')
         self.ax.grid(True, linestyle=':', alpha=0.6)
         
@@ -75,11 +78,13 @@ class PoseViewer2D:
         # --- Timer for Playback ---
         self.timer = self.fig.canvas.new_timer(interval=self.interval)
         self.timer.add_callback(self._on_timer)
-        
+
+        # --- Clean shutdown: stop timer before canvas is destroyed ---
+        self.fig.canvas.mpl_connect('close_event', self._on_close)
+
         self._draw_frame(0)
 
     def load_pose_data(self, file_path):
-        """Processes JSON where detections have track_id_native and keypoints_xyz."""
         try:
             with open(file_path, 'r') as f:
                 all_detections = json.load(f)
@@ -94,42 +99,46 @@ class PoseViewer2D:
             kp = np.array(d.get('keypoints_xyz', []), dtype=float)
             if kp.size == 0: continue
             
-            # CHANGE 'track_id' TO 'track_id_native' HERE
             tid = d.get('track_id_native', 0)
-            
-            frames_map[frame_idx].append({
-                'keypoints': kp, 
-                'track_id': tid
-            })
-            
+            frames_map[frame_idx].append({'keypoints': kp, 'track_id': tid})
             max_x = max(max_x, np.max(kp[:, 0]))
             max_y = max(max_y, np.max(kp[:, 1]))
             
         return frames_map, int(max_x * 1.1), int(max_y * 1.1)
     
     def _add_widgets(self):
-        # Position definitions [left, bottom, width, height]
-        ax_prev = plt.axes([0.15, 0.20, 0.08, 0.05])
-        ax_play = plt.axes([0.24, 0.20, 0.08, 0.05])
-        ax_next = plt.axes([0.33, 0.20, 0.08, 0.05])
-        ax_save = plt.axes([0.15, 0.12, 0.12, 0.05])
-        
-        ax_kp_input = plt.axes([0.70, 0.20, 0.10, 0.05])
-        ax_height_input = plt.axes([0.70, 0.12, 0.10, 0.05])
-        ax_target_id = plt.axes([0.50, 0.20, 0.10, 0.05])
+        # Row positions (bottom → top): slider, row1 (playback), row2 (params), row3 (fighter)
+        # [left, bottom, width, height]
+
+        # --- Row 1: playback + save ---
+        ax_prev = plt.axes([0.15, 0.27, 0.08, 0.05])
+        ax_play = plt.axes([0.24, 0.27, 0.08, 0.05])
+        ax_next = plt.axes([0.33, 0.27, 0.08, 0.05])
+        ax_save = plt.axes([0.75, 0.27, 0.12, 0.05])
+
+        # --- Row 2: measurement params ---
+        ax_kp_input     = plt.axes([0.70, 0.19, 0.10, 0.05])
+        ax_height_input = plt.axes([0.70, 0.11, 0.10, 0.05])
+        ax_target_id    = plt.axes([0.50, 0.19, 0.10, 0.05])
+
+        # --- Row 3: fighter name (NEW) ---
+        ax_fighter      = plt.axes([0.50, 0.11, 0.14, 0.05])
+
+        # --- Slider ---
         ax_slider = plt.axes([0.15, 0.05, 0.7, 0.03])
 
-        self.slider = Slider(ax_slider, 'Frame', 0, self.num_frames - 1, valinit=0, valstep=1)
-        self.btn_prev = Button(ax_prev, 'Prev')
-        self.btn_play = Button(ax_play, 'Play')
-        self.btn_next = Button(ax_next, 'Next')
-        self.btn_save = Button(ax_save, 'Save JSON')
-        
-        self.tb_kp = TextBox(ax_kp_input, 'Points (A,B) ', initial="0,15")
-        self.tb_height = TextBox(ax_height_input, 'Height (In) ', initial="70.0")
-        self.tb_target = TextBox(ax_target_id, 'Target ID ', initial="0")
+        self.slider      = Slider(ax_slider, 'Frame', 0, self.num_frames - 1, valinit=0, valstep=1)
+        self.btn_prev    = Button(ax_prev, 'Prev')
+        self.btn_play    = Button(ax_play, 'Play')
+        self.btn_next    = Button(ax_next, 'Next')
+        self.btn_save    = Button(ax_save, 'Save JSON')
 
-        # Wire up events
+        self.tb_kp       = TextBox(ax_kp_input,     'Points (A,B) ', initial="0,15")
+        self.tb_height   = TextBox(ax_height_input,  'Height (In)  ', initial="70.0")
+        self.tb_target   = TextBox(ax_target_id,     'Target ID    ', initial="0")
+        self.tb_fighter  = TextBox(ax_fighter,       'Fighter Name ', initial="")   # NEW
+
+        # Wire events
         self.btn_play.on_clicked(self.toggle_play)
         self.btn_prev.on_clicked(lambda e: self.step(-1))
         self.btn_next.on_clicked(lambda e: self.step(1))
@@ -138,12 +147,12 @@ class PoseViewer2D:
         self.tb_kp.on_submit(self._on_kp_submit)
         self.tb_height.on_submit(self._on_height_submit)
         self.tb_target.on_submit(self._on_target_submit)
+        self.tb_fighter.on_submit(self._on_fighter_submit)   # NEW
 
     def _draw_frame(self, frame_idx_in_list):
         actual_frame = self.sorted_frames[frame_idx_in_list]
         people = self.frames_map.get(actual_frame, [])
         
-        # Remove old artists
         for a in self.scatters + self.lines + self.labels:
             a.remove()
         self.scatters, self.lines, self.labels = [], [], []
@@ -151,37 +160,33 @@ class PoseViewer2D:
         target_kp = None
         
         for p in people:
-            kp = p['keypoints']
+            kp  = p['keypoints']
             tid = p['track_id']
             color = ID_COLORS(tid % 10)
             
             if tid == self.target_person_id:
                 target_kp = kp
 
-            # Draw Keypoints
             scat = self.ax.scatter(kp[:, 0], kp[:, 1], c=[color], s=40, zorder=3)
             self.scatters.append(scat)
             
-            # Draw Skeleton
             for a_idx, b_idx in SKELETON_EDGES:
                 if a_idx < len(kp) and b_idx < len(kp):
-                    line, = self.ax.plot([kp[a_idx, 0], kp[b_idx, 0]], 
-                                        [kp[a_idx, 1], kp[b_idx, 1]], 
-                                        c=color, lw=1.5, alpha=0.6, zorder=2)
+                    line, = self.ax.plot([kp[a_idx, 0], kp[b_idx, 0]],
+                                         [kp[a_idx, 1], kp[b_idx, 1]],
+                                         c=color, lw=1.5, alpha=0.6, zorder=2)
                     self.lines.append(line)
             
-            # ID Label
             label = self.ax.text(kp[0,0], kp[0,1]-10, f"ID:{tid}", color=color, fontweight='bold')
             self.labels.append(label)
 
-        # Custom Distance Measurement
+        # Custom distance line
         a, b = self.custom_line_points
         if target_kp is not None and a < len(target_kp) and b < len(target_kp):
             x_vals = [target_kp[a, 0], target_kp[b, 0]]
             y_vals = [target_kp[a, 1], target_kp[b, 1]]
             self.custom_line.set_data(x_vals, y_vals)
-            
-            px_dist = distTwoPoints2D(x_vals[0], y_vals[0], x_vals[1], y_vals[1])
+            px_dist  = distTwoPoints2D(x_vals[0], y_vals[0], x_vals[1], y_vals[1])
             real_dist = px_dist * self.sf_vertical
             self.custom_line_text.set_position(((x_vals[0]+x_vals[1])/2, (y_vals[0]+y_vals[1])/2))
             self.custom_line_text.set_text(f"{real_dist:.1f} in")
@@ -189,10 +194,23 @@ class PoseViewer2D:
             self.custom_line.set_data([], [])
             self.custom_line_text.set_text("")
 
-        self.ax.set_title(f"2D Multi-Pose Viewer | Frame: {actual_frame} | Target Tracking ID: {self.target_person_id}")
+        # Title reflects fighter name if set
+        name_tag = f" | {self.fighter_name}" if self.fighter_name else ""
+        self.ax.set_title(
+            f"2D Multi-Pose Viewer | Frame: {actual_frame} "
+            f"| Target ID: {self.target_person_id}{name_tag}"
+        )
         self.fig.canvas.draw_idle()
 
-    # --- Interaction Logic ---
+    # --- Playback ---
+    def _on_close(self, event):
+        """Stop the timer cleanly when the window closes to avoid macOS trace trap."""
+        self.is_playing = False
+        try:
+            self.timer.stop()
+        except Exception:
+            pass
+
     def _on_timer(self):
         if self.is_playing:
             self.i = (self.i + 1) % self.num_frames
@@ -201,15 +219,12 @@ class PoseViewer2D:
     def toggle_play(self, event=None):
         self.is_playing = not self.is_playing
         self.btn_play.label.set_text('Pause' if self.is_playing else 'Play')
-        if self.is_playing:
-            self.timer.start()
-        else:
-            self.timer.stop()
+        if self.is_playing: self.timer.start()
+        else:               self.timer.stop()
         self.fig.canvas.draw_idle()
 
     def step(self, delta):
-        if self.is_playing:
-            self.toggle_play()
+        if self.is_playing: self.toggle_play()
         self.i = (self.i + delta) % self.num_frames
         self.slider.set_val(self.i)
 
@@ -217,6 +232,7 @@ class PoseViewer2D:
         self.i = int(val)
         self._draw_frame(self.i)
 
+    # --- Input handlers ---
     def _on_kp_submit(self, text):
         try:
             self.custom_line_points = tuple(map(int, text.split(',')))
@@ -228,6 +244,11 @@ class PoseViewer2D:
             self.target_person_id = int(text)
             self._draw_frame(self.i)
         except: print("Invalid Target ID.")
+
+    def _on_fighter_submit(self, text):           # NEW
+        """Store fighter name and refresh title."""
+        self.fighter_name = text.strip()
+        self._draw_frame(self.i)
 
     def _on_height_submit(self, text):
         try:
@@ -249,23 +270,37 @@ class PoseViewer2D:
 
     def _on_save(self):
         actual_frame = self.sorted_frames[self.i]
-        target_kp = next((p['keypoints'] for p in self.frames_map[actual_frame] if p['track_id'] == self.target_person_id), None)
+        target_kp = next(
+            (p['keypoints'] for p in self.frames_map[actual_frame]
+             if p['track_id'] == self.target_person_id), None
+        )
         
         if target_kp is None:
             print("Target not found in this frame. Cannot save.")
             return
         
         output = {
-            "frame": actual_frame, 
+            "fighter_name": self.fighter_name,      # NEW: saved to JSON
+            "frame": actual_frame,
             "target_id": self.target_person_id,
             "scale_factor": self.sf_vertical,
             "measurements_inches": {}
         }
         for a, b, name in LIMB_SEGMENTS_TO_SAVE:
-            d = distTwoPoints2D(target_kp[a,0], target_kp[a,1], target_kp[b,0], target_kp[b,1]) * self.sf_vertical
+            d = distTwoPoints2D(
+                target_kp[a,0], target_kp[a,1],
+                target_kp[b,0], target_kp[b,1]
+            ) * self.sf_vertical
             output["measurements_inches"][name] = round(float(d), 2)
         
-        filename = f'measurements_frame_{actual_frame}_id_{self.target_person_id}.json'
+        # Save into a subdirectory named after the video
+        name_slug = self.fighter_name.replace(" ", "_") if self.fighter_name else "unknown"
+        out_dir   = self.video_name if self.video_name else "measurements"
+        os.makedirs(out_dir, exist_ok=True)
+        filename  = os.path.join(
+            out_dir,
+            f'measurements_{name_slug}_frame_{actual_frame}_id_{self.target_person_id}.json'
+        )
         with open(filename, 'w') as f:
             json.dump(output, f, indent=4)
         print(f"Saved to {filename}")
@@ -273,4 +308,3 @@ class PoseViewer2D:
     def run(self):
         print(f"Viewer loaded with {self.num_frames} frames.")
         plt.show()
-

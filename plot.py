@@ -206,10 +206,12 @@ class PoseViewer2D:
     def _on_close(self, event):
         """Stop the timer cleanly when the window closes to avoid macOS trace trap."""
         self.is_playing = False
-        try:
-            self.timer.stop()
-        except Exception:
-            pass
+        if hasattr(self, 'timer'):
+            try:
+                self.timer.stop()
+            except Exception:
+                pass
+        plt.close('all')
 
     def _on_timer(self):
         if self.is_playing:
@@ -269,6 +271,10 @@ class PoseViewer2D:
         self._draw_frame(self.i)
 
     def _on_save(self):
+        # Pause playback before starting file I/O to avoid trace traps
+        if self.is_playing:
+            self.toggle_play()
+
         actual_frame = self.sorted_frames[self.i]
         target_kp = next(
             (p['keypoints'] for p in self.frames_map[actual_frame]
@@ -296,9 +302,9 @@ class PoseViewer2D:
         # Save into a subdirectory named after the video
         name_slug = self.fighter_name.replace(" ", "_") if self.fighter_name else "unknown"
         out_dir   = self.video_name if self.video_name else "measurements"
-        os.makedirs(out_dir, exist_ok=True)
+        os.makedirs(f'Data/{out_dir}', exist_ok=True)
         filename  = os.path.join(
-            out_dir,
+            f'Data/{out_dir}',
             f'measurements_{name_slug}_frame_{actual_frame}_id_{self.target_person_id}.json'
         )
         with open(filename, 'w') as f:

@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('TkAgg') # Force TkAgg backend to prevent macOS trace trap errors
+
 import numpy as np 
 import json 
 from ultralytics import YOLO 

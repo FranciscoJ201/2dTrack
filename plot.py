@@ -3,6 +3,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, Slider, TextBox
+import matplotlib.animation as animation # Added for video exporting
 from collections import defaultdict
 
 # =========================================================================
@@ -311,6 +312,26 @@ class PoseViewer2D:
             json.dump(output, f, indent=4)
         print(f"Saved to {filename}")
 
-    def run(self):
+    def run(self, save_video=False, output_path="output.mp4"):
+        """
+        Runs the viewer and optionally saves the animation to an MP4 file.
+        
+        Arguments:
+        - save_video (bool): If True, iterates through all frames and saves the plot as a video before opening the GUI.
+        - output_path (str): The filename/path to save the exported video to.
+        """
         print(f"Viewer loaded with {self.num_frames} frames.")
+        
+        if save_video:
+            print(f"Saving video to {output_path} at {self.fps} FPS... This may take a moment.")
+            
+            writer = animation.FFMpegWriter(fps=self.fps)
+            
+            with writer.saving(self.fig, output_path, dpi=100):
+                for i in range(self.num_frames):
+                    self.slider.set_val(i) 
+                    writer.grab_frame()
+                    
+            print(f"Video successfully saved to {output_path}")
+
         plt.show()

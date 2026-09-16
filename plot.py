@@ -28,7 +28,7 @@ LIMB_SEGMENTS_TO_SAVE = [
     (9, 7, "Left_Wrist_to_Elbow"), (7, 5, "Left_Elbow_to_Shoulder"),
 ]
 
-ID_COLORS = plt.cm.get_cmap('hsv', 10)
+ID_COLORS = plt.get_cmap('hsv', 10)
 CUSTOM_LINE_COLOR = 'magenta'
 REF_HEAD_IDX = 0
 REF_FOOT_IDX = 15
@@ -39,6 +39,15 @@ REF_FOOT_IDX = 15
 
 class PoseViewer2D:
     def __init__(self, json_path, fps=15, video_name=""):
+        """
+        Initializes the 2D Pose Viewer.
+        
+        Arguments:
+        - self: The instance of the class.
+        - json_path (str): Path to the pose estimation JSON file.
+        - fps (float): Frames per second for playback.
+        - video_name (str): The name of the video for saving output.
+        """
         # --- Data Loading ---
         self.frames_map, self.x_lim, self.y_lim = self.load_pose_data(json_path)
         self.sorted_frames = sorted(self.frames_map.keys())
@@ -58,7 +67,8 @@ class PoseViewer2D:
         self.target_person_id = 0
         self.fighter_name = ""
         self.video_name = video_name    # used to name the output directory
-
+        self.show_highlighted_limbs = False # NEW: State for highlighting target limbs
+        
         # --- Figure Setup ---
         self.fig, self.ax = plt.subplots(figsize=(11, 7))
         plt.subplots_adjust(bottom=0.35)   # extra room for the new row
@@ -115,6 +125,7 @@ class PoseViewer2D:
         ax_prev = plt.axes([0.15, 0.27, 0.08, 0.05])
         ax_play = plt.axes([0.24, 0.27, 0.08, 0.05])
         ax_next = plt.axes([0.33, 0.27, 0.08, 0.05])
+        ax_hl   = plt.axes([0.45, 0.27, 0.14, 0.05]) # NEW: Highlight button
         ax_save = plt.axes([0.75, 0.27, 0.12, 0.05])
 
         # --- Row 2: measurement params ---
@@ -122,7 +133,7 @@ class PoseViewer2D:
         ax_height_input = plt.axes([0.70, 0.11, 0.10, 0.05])
         ax_target_id    = plt.axes([0.50, 0.19, 0.10, 0.05])
 
-        # --- Row 3: fighter name (NEW) ---
+        # --- Row 3: fighter name ---
         ax_fighter      = plt.axes([0.50, 0.11, 0.14, 0.05])
 
         # --- Slider ---
@@ -132,25 +143,45 @@ class PoseViewer2D:
         self.btn_prev    = Button(ax_prev, 'Prev')
         self.btn_play    = Button(ax_play, 'Play')
         self.btn_next    = Button(ax_next, 'Next')
+        self.btn_hl      = Button(ax_hl, 'Toggle Limbs') # NEW
         self.btn_save    = Button(ax_save, 'Save JSON')
 
         self.tb_kp       = TextBox(ax_kp_input,     'Points (A,B) ', initial="0,15")
         self.tb_height   = TextBox(ax_height_input,  'Height (In)  ', initial="70.0")
         self.tb_target   = TextBox(ax_target_id,     'Target ID    ', initial="0")
-        self.tb_fighter  = TextBox(ax_fighter,       'Fighter Name ', initial="")   # NEW
+        self.tb_fighter  = TextBox(ax_fighter,       'Fighter Name ', initial="")
 
         # Wire events
         self.btn_play.on_clicked(self.toggle_play)
         self.btn_prev.on_clicked(lambda e: self.step(-1))
         self.btn_next.on_clicked(lambda e: self.step(1))
+        self.btn_hl.on_clicked(self.toggle_highlight) # NEW
         self.btn_save.on_clicked(lambda e: self._on_save())
         self.slider.on_changed(self._on_slider_change)
         self.tb_kp.on_submit(self._on_kp_submit)
         self.tb_height.on_submit(self._on_height_submit)
         self.tb_target.on_submit(self._on_target_submit)
-        self.tb_fighter.on_submit(self._on_fighter_submit)   # NEW
+        self.tb_fighter.on_submit(self._on_fighter_submit)
+
+    def toggle_highlight(self, event=None):
+        """
+        Toggles the boolean state for drawing highlighted limbs and redraws.
+        
+        Arguments:
+        - self: The instance of the class.
+        - event: The mouse click event from the matplotlib button (default: None).
+        """
+        self.show_highlighted_limbs = not self.show_highlighted_limbs
+        self._draw_frame(self.i)
 
     def _draw_frame(self, frame_idx_in_list):
+        """
+        Draws the pose skeleton and relevant overlays for a given frame.
+        
+        Arguments:
+        - self: The instance of the class.
+        - frame_idx_in_list (int): The index of the current frame within the sorted_frames list.
+        """
         actual_frame = self.sorted_frames[frame_idx_in_list]
         people = self.frames_map.get(actual_frame, [])
         
@@ -180,6 +211,17 @@ class PoseViewer2D:
             
             label = self.ax.text(kp[0,0], kp[0,1]-10, f"ID:{tid}", color=color, fontweight='bold')
             self.labels.append(label)
+
+        # --- NEW: Highlight Limbs to Save for Target ID ---
+        if self.show_highlighted_limbs and target_kp is not None:
+            hl_cmap = plt.get_cmap('tab10', 10)
+            for j, (a_idx, b_idx, name) in enumerate(LIMB_SEGMENTS_TO_SAVE):
+                if a_idx < len(target_kp) and b_idx < len(target_kp):
+                    limb_color = hl_cmap(j % 10)
+                    line, = self.ax.plot([target_kp[a_idx, 0], target_kp[b_idx, 0]],
+                                         [target_kp[a_idx, 1], target_kp[b_idx, 1]],
+                                         c=limb_color, lw=3.5, zorder=4)
+                    self.lines.append(line)
 
         # Custom distance line
         a, b = self.custom_line_points
@@ -248,7 +290,7 @@ class PoseViewer2D:
             self._draw_frame(self.i)
         except: print("Invalid Target ID.")
 
-    def _on_fighter_submit(self, text):           # NEW
+    def _on_fighter_submit(self, text):           
         """Store fighter name and refresh title."""
         self.fighter_name = text.strip()
         self._draw_frame(self.i)
@@ -287,11 +329,12 @@ class PoseViewer2D:
             return
         
         output = {
-            "fighter_name": self.fighter_name,      # NEW: saved to JSON
+            "fighter_name": self.fighter_name,      
             "frame": actual_frame,
             "target_id": self.target_person_id,
             "scale_factor": self.sf_vertical,
-            "measurements_inches": {}
+            "measurements_inches": {},
+            'fighter_height_inches':self.ref_height_inches
         }
         for a, b, name in LIMB_SEGMENTS_TO_SAVE:
             d = distTwoPoints2D(
@@ -317,6 +360,7 @@ class PoseViewer2D:
         Runs the viewer and optionally saves the animation to an MP4 file.
         
         Arguments:
+        - self: The instance of the class.
         - save_video (bool): If True, iterates through all frames and saves the plot as a video before opening the GUI.
         - output_path (str): The filename/path to save the exported video to.
         """

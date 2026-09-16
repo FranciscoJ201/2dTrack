@@ -11,7 +11,7 @@ def sanitize_filename(name):
     return name
 
 def poseestimate(source):
-    model = YOLO('yolov8n-pose.pt') 
+    model = YOLO('yolo26n-pose.pt') 
 
     sor = source
     results = model.track(
@@ -19,7 +19,7 @@ def poseestimate(source):
         tracker='botsort.yaml', 
         show=True, 
         conf=0.3, 
-        save=False 
+        save=True
     )
     base_name = os.path.basename(sor)
     video_name, _ = os.path.splitext(base_name)
